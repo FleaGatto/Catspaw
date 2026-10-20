@@ -507,7 +507,9 @@ class CustomFFlagModifier:
         )
 
     def _synchronize_linux_flags(self) -> bool:
-        flags = self.runtime_flags() if self.is_enabled() else {}
+        # Native flag files belong to the user's custom-flag toggle. is_enabled()
+        # is always true now that it also covers certificate compatibility
+        flags = self.runtime_flags() if self.custom_flags_enabled() else {}
         current_paths = set(platform_linux.find_linux_fflag_files())
         managed_paths = self._managed_linux_flags()
         stale_paths = managed_paths - current_paths if flags else managed_paths
@@ -547,7 +549,7 @@ class CustomFFlagModifier:
         # helper contract for macOS; it must take precedence over the host OS.
         if self._macos_resource_dirs is not None or sys.platform == 'darwin':
             return self.prime_macos_client_settings()
-        if self._flag_cache_path is None and sys.platform.startswith('linux'):
+        if self._flag_cache_path is None and not IS_WINDOWS and sys.platform.startswith('linux'):
             return self.prime_linux_client_flags()
         return self.prime_windows_flag_cache()
 
