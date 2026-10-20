@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build-packages:
@@ -23,6 +25,15 @@ jobs:
           path: release-files
           merge-multiple: true
           skip-decompress: true
+
+      - name: Write checksums
+        working-directory: release-files
+        run: sha256sum Fleasion-* | tee SHA256SUMS.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: release-files/Fleasion-*
 
       - name: Create draft GitHub release
         uses: softprops/action-gh-release@v3
