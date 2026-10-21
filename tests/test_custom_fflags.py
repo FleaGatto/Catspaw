@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from fleasion.proxy.addons import custom_fflags as custom_fflags_module
 from fleasion.proxy.addons.custom_fflags import (
     DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG,
+    DYNAMIC_VARIABLE_RELOAD_INTERVAL_SECONDS,
+    EXTERNAL_CA_FLAG,
+    EXTERNAL_CA_FLAG_VALUE,
     CustomFFlagModifier,
     normalize_custom_fflags,
 )
@@ -26,6 +29,20 @@ from fleasion.proxy.server import (
     _without_internal_client_settings_headers,
     _without_conditional_client_settings_headers,
 )
+
+
+def _delivered_settings(**flags: str) -> dict[str, str]:
+    """Return the applicationSettings this build's delivery mode produces.
+
+    The CA override ships behind ``EXTERNAL_CA_FLAG_DELIVERY`` so that each
+    delivery path can be released and tested on its own, so the tests covering
+    rewritten responses have to follow whichever path this build selected.
+    """
+    settings = dict(flags)
+    if CustomFFlagModifier.delivers_live_ca_flag():
+        settings[EXTERNAL_CA_FLAG] = EXTERNAL_CA_FLAG_VALUE
+        settings[DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG] = DYNAMIC_VARIABLE_RELOAD_INTERVAL_SECONDS
+    return settings
 
 
 class _BufferWriter:
@@ -519,10 +536,10 @@ def test_proxy_counts_already_correct_client_settings_response_as_success():
     modifier = CustomFFlagModifier(config)
     body = json.dumps(
         {
-            'applicationSettings': {
-                'FFlagExample': 'True',
-                DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
-            }
+            'applicationSettings': _delivered_settings(
+                FFlagExample='True',
+                **{DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1'},
+            )
         },
         separators=(',', ':'),
     ).encode('utf-8')
@@ -723,7 +740,7 @@ def test_modifier_passes_the_windows_bootstrapper_through_unchanged():
     )
 
 
-def test_modifier_is_true_passthrough_when_disabled():
+def test_modifier_leaves_saved_flags_out_of_responses_when_disabled():
     config = SimpleNamespace(
         custom_fflags_enabled=False,
         custom_fflags={'DFIntTaskSchedulerTargetFps': '20'},
@@ -731,9 +748,15 @@ def test_modifier_is_true_passthrough_when_disabled():
     modifier = CustomFFlagModifier(config)
     original = b'{"applicationSettings":{"Existing":"True"}}'
 
-    assert modifier.modify_response('/v2/settings/application/PCDesktopClient', original) is (
-        original
-    )
+    modified = modifier.modify_response('/v2/settings/application/PCDesktopClient', original)
+
+    if not CustomFFlagModifier.delivers_live_ca_flag():
+        # Nothing is delivered live, so the response is passed through byte for byte
+        assert modified is original
+        return
+    # The CA override is a proxy requirement rather than a user preference, so
+    # it still lands, but the user's own disabled flags must not come with it
+    assert json.loads(modified)['applicationSettings'] == _delivered_settings(Existing='True')
 
 
 def test_proxy_leaves_clientsettings_untouched_with_custom_flags_off() -> None:
@@ -750,13 +773,14 @@ def test_proxy_leaves_clientsettings_untouched_with_custom_flags_off() -> None:
     delivered, forwarded = _run_client_settings_session(modifier, response, conditional=True)
 
     payload = json.loads(delivered.split(b'\r\n\r\n', 1)[1])['applicationSettings']
-    assert payload == {
-        'DFFlagHttpUseEmbeddedCaCerts': 'True',
-        'Existing': 'True',
-    }
-    # Flags are off, so the conditional request goes upstream exactly as the
-    # client sent it instead of being forced into an unconditional fetch.
-    assert b'if-none-match' in forwarded.lower()
+    assert payload == _delivered_settings(
+        **{EXTERNAL_CA_FLAG: 'True', 'Existing': 'True'},
+    )
+    if not CustomFFlagModifier.delivers_live_ca_flag():
+        # Flags are off and nothing is delivered live, so the conditional
+        # request goes upstream exactly as the client sent it instead of being
+        # forced into an unconditional fetch.
+        assert b'if-none-match' in forwarded.lower()
     assert not config.custom_fflags_enabled
     assert config.custom_fflags == {'FFlagExample': 'True'}
 
@@ -832,7 +856,9 @@ def test_windows_custom_fflags_intercept_clientsettings_before_player_starts(mon
     proxy = proxy_master.ProxyMaster.__new__(proxy_master.ProxyMaster)
     proxy.config_manager = SimpleNamespace(settings={})
     proxy.username_spoofer = SimpleNamespace(is_enabled=lambda: False)
-    proxy.custom_fflag_modifier = SimpleNamespace(is_enabled=lambda: True)
+    proxy.custom_fflag_modifier = SimpleNamespace(
+        is_enabled=lambda: True, intercepts_responses=lambda: True
+    )
     proxy._roblox_player_running = False
 
     assert proxy._desired_intercept_hosts() == (
