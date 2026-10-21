@@ -45,6 +45,14 @@ def _delivered_settings(**flags: str) -> dict[str, str]:
     return settings
 
 
+def _seeded_settings(**flags: str) -> dict[str, str]:
+    """Return the local pre-launch flags this build's delivery mode produces."""
+    settings = dict(flags)
+    if CustomFFlagModifier.delivers_local_ca_flag():
+        settings[EXTERNAL_CA_FLAG] = EXTERNAL_CA_FLAG_VALUE
+    return settings
+
+
 class _BufferWriter:
     def __init__(self, *, fail_drain: bool = False):
         self.buffer = bytearray()
@@ -304,7 +312,7 @@ def test_modifier_removes_all_saved_overrides_when_windows_feature_is_disabled(t
     assert modifier.prime_windows_flag_cache()
 
     payload = json.loads(cache_path.read_bytes()[5:])['applicationSettings']
-    assert payload == {'Existing': 'True'}
+    assert payload == _seeded_settings(Existing='True')
 
 
 def test_modifier_primes_macos_player_client_settings(tmp_path):
@@ -321,12 +329,12 @@ def test_modifier_primes_macos_player_client_settings(tmp_path):
     assert modifier.prime_startup_flag_cache()
 
     payload = json.loads(settings.read_text(encoding='utf-8'))
-    assert payload == {
-        'Existing': 'True',
-        'DFFlagDebugDrawBroadPhaseAABBs': 'True',
-        'FFlagExample': 'False',
-        DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
-    }
+    assert payload == _seeded_settings(
+        Existing='True',
+        DFFlagDebugDrawBroadPhaseAABBs='True',
+        FFlagExample='False',
+        **{DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1'},
+    )
 
 
 def test_modifier_removes_previous_macos_seed_when_flags_change_or_disable(tmp_path):
@@ -347,7 +355,7 @@ def test_modifier_removes_previous_macos_seed_when_flags_change_or_disable(tmp_p
 
     config.custom_fflags_enabled = False
     assert modifier.prime_macos_client_settings()
-    assert json.loads(settings.read_text(encoding='utf-8')) == {'Existing': 'True'}
+    assert json.loads(settings.read_text(encoding='utf-8')) == _seeded_settings(Existing='True')
 
 
 def test_modifier_does_not_replace_an_unknown_compressed_flag_cache(tmp_path):
