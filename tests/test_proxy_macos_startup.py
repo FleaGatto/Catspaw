@@ -778,7 +778,9 @@ def test_linux_custom_fflags_wait_for_sober_engine_bootstrap_window(monkeypatch)
     proxy = proxy_master.ProxyMaster.__new__(proxy_master.ProxyMaster)
     proxy.config_manager = SimpleNamespace(settings={})
     proxy.username_spoofer = SimpleNamespace(is_enabled=lambda: False)
-    proxy.custom_fflag_modifier = SimpleNamespace(is_enabled=lambda: True)
+    proxy.custom_fflag_modifier = SimpleNamespace(
+        is_enabled=lambda: True, intercepts_responses=lambda: True
+    )
     installation = SimpleNamespace(
         key='sober',
         client=SimpleNamespace(clientsettings_route_delay_seconds=30.0),
@@ -1008,6 +1010,7 @@ def test_proxy_startup_self_tests_only_active_intercept_routes(
     proxy.username_spoofer = SimpleNamespace(is_enabled=lambda: False)
     proxy.custom_fflag_modifier = SimpleNamespace(
         is_enabled=lambda: True,
+        intercepts_responses=lambda: True,
         prime_windows_flag_cache=lambda: False,
     )
     proxy._module_interceptors = []
@@ -1201,6 +1204,7 @@ def test_linux_helper_custom_fflags_adds_only_clientsettings_endpoints(monkeypat
     proxy.username_spoofer = SimpleNamespace(is_enabled=lambda: False)
     proxy.custom_fflag_modifier = SimpleNamespace(
         is_enabled=lambda: True,
+        intercepts_responses=lambda: True,
         prime_windows_flag_cache=lambda: False,
     )
     proxy._linux_sober_custom_fflag_routes_ready = lambda: True
@@ -1230,7 +1234,9 @@ def test_intercept_configuration_log_distinguishes_tls_coverage_from_active_rout
         SimpleNamespace(log=lambda category, message: logs.append((category, message))),
     )
     proxy = proxy_master.ProxyMaster.__new__(proxy_master.ProxyMaster)
-    proxy.custom_fflag_modifier = SimpleNamespace(is_enabled=lambda: False)
+    proxy.custom_fflag_modifier = SimpleNamespace(
+        is_enabled=lambda: False, intercepts_responses=lambda: False
+    )
     proxy.username_spoofer = SimpleNamespace(is_enabled=lambda: True)
 
     proxy._log_intercept_configuration(

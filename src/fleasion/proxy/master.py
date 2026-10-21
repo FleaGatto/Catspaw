@@ -4549,7 +4549,7 @@ class ProxyMaster:
         custom_modifier = getattr(self, 'custom_fflag_modifier', None)
         if (
             custom_modifier is not None
-            and custom_modifier.is_enabled()
+            and custom_modifier.intercepts_responses()
             and self._linux_sober_custom_fflag_routes_ready()
         ):
             hosts.update(CUSTOM_FFLAGS_INTERCEPT_HOSTS)
@@ -4656,9 +4656,10 @@ class ProxyMaster:
             previous_custom_fflags_enabled: bool | None = None
             while not stop_event.is_set():
                 process = linux_client_main_process(installation)
+                modifier = getattr(self, 'custom_fflag_modifier', None)
                 custom_fflags_enabled = bool(
                     getattr(self.config_manager, 'custom_fflags_enabled', False)
-                )
+                ) or (modifier is not None and modifier.delivers_live_ca_flag())
                 ready = False
                 if process is not None:
                     _pid, started_at = process

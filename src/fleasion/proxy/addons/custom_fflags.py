@@ -23,6 +23,19 @@ CLIENT_SETTINGS_COMPRESSED_PATH = '/settings-compressed/application/'
 BOOTSTRAPPER_CLIENT_SETTINGS_PLATFORM = 'PCClientBootstrapper'
 DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG = 'DFIntSecondsBetweenDynamicVariableReloading'
 DYNAMIC_VARIABLE_RELOAD_INTERVAL_SECONDS = '1'
+# Roblox must read the cacert.pem bundle that Fleasion patched its root CA
+# into, rather than the roots compiled into the client. Without the override
+# every proxied TLS request fails its certificate check
+EXTERNAL_CA_FLAG = 'DFFlagHttpUseEmbeddedCaCerts'
+EXTERNAL_CA_FLAG_VALUE = 'False'
+# Which delivery path carries EXTERNAL_CA_FLAG in this build. Issue #115 showed
+# the two paths do not behave the same way on real installs, so each one ships
+# as its own release and gets tested on its own
+#   'live'  - only the ClientSettings responses the proxy rewrites
+#   'local' - only the pre-launch files Roblox reads before it has networking
+#   'both'  - both of the above
+#   'off'   - neither, matching v2.4.4
+EXTERNAL_CA_FLAG_DELIVERY = 'live'
 IS_WINDOWS = sys.platform == 'win32'
 WINDOWS_FLAG_CACHE_PATH = LOCAL_APPDATA / 'Temp' / 'Roblox' / 'cache' / 'flag_cache.dat'
 MACOS_CLIENT_SETTINGS_REL = Path('ClientSettings') / 'ClientAppSettings.json'
@@ -122,7 +135,7 @@ class CustomFFlagModifier:
         generation are ignored after a relaunch has armed the next Player.
         """
         if delivered_signature is None:
-            delivered_signature = self._flag_signature(self.runtime_flags())
+            delivered_signature = self._flag_signature(self.response_flags())
         with self._delivery_state_lock:
             if generation is not None and generation != self._delivery_generation:
                 return False
@@ -194,6 +207,45 @@ class CustomFFlagModifier:
         return bool(getattr(self.config_manager, 'custom_fflags_enabled', False))
 
     @staticmethod
+    def delivers_live_ca_flag() -> bool:
+        """Return whether rewritten ClientSettings responses carry the CA override."""
+        return EXTERNAL_CA_FLAG_DELIVERY in {'live', 'both'}
+
+    @staticmethod
+    def delivers_local_ca_flag() -> bool:
+        """Return whether local pre-launch flag sources carry the CA override."""
+        return EXTERNAL_CA_FLAG_DELIVERY in {'local', 'both'}
+
+    def intercepts_responses(self) -> bool:
+        """Return whether ClientSettings responses still need rewriting.
+
+        The CA override is a proxy requirement rather than a user preference,
+        so interception has to survive the user turning custom FastFlags off.
+        """
+        return self.is_enabled() or self.delivers_live_ca_flag()
+
+    def seeds_local_flags(self) -> bool:
+        """Return whether local pre-launch flag sources still need writing."""
+        return self.is_enabled() or self.delivers_local_ca_flag()
+
+    def response_flags(self) -> dict[str, str]:
+        """Return the overrides merged into live ClientSettings responses."""
+        flags = self.runtime_flags() if self.is_enabled() else {}
+        if self.delivers_live_ca_flag():
+            # Applied after the user's filters so that neither a saved value
+            # nor a disabled folder can take the override back out
+            flags[EXTERNAL_CA_FLAG] = EXTERNAL_CA_FLAG_VALUE
+            flags[DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG] = DYNAMIC_VARIABLE_RELOAD_INTERVAL_SECONDS
+        return flags
+
+    def local_flags(self) -> dict[str, str]:
+        """Return the overrides seeded into local pre-launch flag sources."""
+        flags = self.runtime_flags() if self.is_enabled() else {}
+        if self.delivers_local_ca_flag():
+            flags[EXTERNAL_CA_FLAG] = EXTERNAL_CA_FLAG_VALUE
+        return flags
+
+    @staticmethod
     def handles_path(path: str) -> bool:
         """Return whether this is a Player ClientSettings document to modify.
 
@@ -262,7 +314,7 @@ class CustomFFlagModifier:
         headers until a response carrying the active override set is actually
         delivered to Roblox; ``note_response_success`` commits that delivery.
         """
-        active_flags = self._flag_signature(self.runtime_flags())
+        active_flags = self._flag_signature(self.response_flags())
         with self._delivery_state_lock:
             return active_flags != self._last_fresh_response_flags
 
@@ -312,8 +364,7 @@ class CustomFFlagModifier:
             if not isinstance(application_settings, dict):
                 return False
 
-            enabled = self.is_enabled()
-            flags = self.runtime_flags() if enabled else {}
+            flags = self.local_flags()
             self._refresh_settings_from_disk()
             saved_flags = (
                 self._disk_flags
@@ -324,7 +375,7 @@ class CustomFFlagModifier:
             stale_names = (
                 self._windows_seeded_flag_names
                 | saved_names
-                | {DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG}
+                | {DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG, EXTERNAL_CA_FLAG}
             ) - set(flags)
             removed_names = {
                 name for name in stale_names if application_settings.pop(name, None) is not None
@@ -403,18 +454,17 @@ class CustomFFlagModifier:
         if not paths:
             return False
 
-        enabled = self.is_enabled()
-        flags = self.runtime_flags() if enabled else {}
+        flags = self.local_flags()
         desired_names = set(flags)
-        saved_names = set()
-        if not enabled:
+        saved_names = {EXTERNAL_CA_FLAG}
+        if not self.is_enabled():
             self._refresh_settings_from_disk()
             saved_flags = (
                 self._disk_flags
                 if self._disk_flags is not None
                 else getattr(self.config_manager, 'custom_fflags', {})
             )
-            saved_names = set(normalize_custom_fflags(saved_flags))
+            saved_names |= set(normalize_custom_fflags(saved_flags))
             saved_names.add(DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG)
         stale_names = (self._macos_seeded_flag_names | saved_names) - desired_names
         updated_paths = 0
@@ -498,7 +548,7 @@ class CustomFFlagModifier:
         )
 
     def _synchronize_linux_flags(self) -> bool:
-        flags = self.runtime_flags() if self.is_enabled() else {}
+        flags = self.local_flags()
         current_paths = set(platform_linux.find_linux_fflag_files())
         managed_paths = self._managed_linux_flags()
         stale_paths = managed_paths - current_paths if flags else managed_paths
@@ -575,10 +625,10 @@ class CustomFFlagModifier:
         Roblox, so freshness is never acknowledged merely because processing
         began.
         """
-        if not self.is_enabled() or not self.handles_path(path):
+        if not self.intercepts_responses() or not self.handles_path(path):
             return body, None
 
-        flags = self.runtime_flags()
+        flags = self.response_flags()
         delivered_signature = self._flag_signature(flags)
 
         try:
