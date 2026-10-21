@@ -2,6 +2,11 @@ name: Build Draft Release
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_macos:
+        description: Release without the macOS package when macOS runners are unavailable.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -12,6 +17,8 @@ jobs:
   build-packages:
     name: Build packages
     uses: ./.github/workflows/build.yml
+    with:
+      skip_macos: ${{ inputs.skip_macos }}
 
   draft-release:
     name: Create draft release

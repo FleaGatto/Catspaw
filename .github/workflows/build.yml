@@ -2,6 +2,12 @@ name: Build PyInstaller Packages
 
 on:
   workflow_call:
+    inputs:
+      skip_macos:
+        description: Build without the macOS package when macOS runners are unavailable.
+        type: boolean
+        default: false
+        required: false
     outputs:
       app_version:
         description: Application version from pyproject.toml.
@@ -34,6 +40,7 @@ jobs:
       app_version: ${{ steps.version.outputs.app_version }}
       artifact_version: ${{ steps.version.outputs.artifact_version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout ref
         uses: actions/checkout@v7
@@ -57,26 +64,45 @@ jobs:
           echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
 
+      - name: Select build matrix
+        id: matrix
+        shell: bash
+        env:
+          SKIP_MACOS: ${{ inputs.skip_macos }}
+          ARTIFACT_VERSION: ${{ steps.version.outputs.artifact_version }}
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+
+          version = os.environ['ARTIFACT_VERSION']
+          targets = [
+              ('Windows', 'windows-latest', f'Fleasion-v{version}-Windows.exe', 'dist/Fleasion-v*-Windows.exe'),
+              ('Linux', 'ubuntu-latest', f'Fleasion-v{version}-Linux', 'dist/Fleasion-v*-Linux'),
+          ]
+          # Hosted macOS runners can stay unassigned long enough for the job to
+          # be cancelled at the queue limit, which blocks the whole release
+          if os.environ.get('SKIP_MACOS', '') != 'true':
+              targets.append((
+                  'macOS',
+                  'macos-latest',
+                  f'Fleasion-v{version}-MacOS-Universal.zip',
+                  'dist/Fleasion-v*-MacOS-Universal.zip',
+              ))
+          include = [
+              {'name': name, 'os': os_label, 'artifact_name': artifact, 'artifact_path': path}
+              for name, os_label, artifact, path in targets
+          ]
+          print('matrix=' + json.dumps({'include': include}))
+          PY
+
   build:
     name: Build ${{ matrix.name }}
     needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            artifact_name: Fleasion-v${{ needs.prepare.outputs.artifact_version }}-Windows.exe
-            artifact_path: dist/Fleasion-v*-Windows.exe
-          - name: Linux
-            os: ubuntu-latest
-            artifact_name: Fleasion-v${{ needs.prepare.outputs.artifact_version }}-Linux
-            artifact_path: dist/Fleasion-v*-Linux
-          - name: macOS
-            os: macos-latest
-            artifact_name: Fleasion-v${{ needs.prepare.outputs.artifact_version }}-MacOS-Universal.zip
-            artifact_path: dist/Fleasion-v*-MacOS-Universal.zip
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout ref
