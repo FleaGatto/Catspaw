@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from fleasion.proxy.addons import custom_fflags as custom_fflags_module
 from fleasion.proxy.addons.custom_fflags import (
     DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG,
-    EXTERNAL_CA_FLAG,
     CustomFFlagModifier,
     normalize_custom_fflags,
 )
@@ -288,11 +287,7 @@ def test_modifier_removes_all_saved_overrides_when_windows_feature_is_disabled(t
     assert modifier.prime_windows_flag_cache()
 
     payload = json.loads(cache_path.read_bytes()[5:])['applicationSettings']
-    assert payload == {
-        'Existing': 'True',
-        EXTERNAL_CA_FLAG: 'False',
-        DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
-    }
+    assert payload == {'Existing': 'True'}
 
 
 def test_modifier_primes_macos_player_client_settings(tmp_path):
@@ -313,7 +308,6 @@ def test_modifier_primes_macos_player_client_settings(tmp_path):
         'Existing': 'True',
         'DFFlagDebugDrawBroadPhaseAABBs': 'True',
         'FFlagExample': 'False',
-        EXTERNAL_CA_FLAG: 'False',
         DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
     }
 
@@ -336,11 +330,7 @@ def test_modifier_removes_previous_macos_seed_when_flags_change_or_disable(tmp_p
 
     config.custom_fflags_enabled = False
     assert modifier.prime_macos_client_settings()
-    assert json.loads(settings.read_text(encoding='utf-8')) == {
-        'Existing': 'True',
-        EXTERNAL_CA_FLAG: 'False',
-        DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
-    }
+    assert json.loads(settings.read_text(encoding='utf-8')) == {'Existing': 'True'}
 
 
 def test_modifier_does_not_replace_an_unknown_compressed_flag_cache(tmp_path):
@@ -531,7 +521,6 @@ def test_proxy_counts_already_correct_client_settings_response_as_success():
         {
             'applicationSettings': {
                 'FFlagExample': 'True',
-                EXTERNAL_CA_FLAG: 'False',
                 DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
             }
         },
@@ -734,7 +723,7 @@ def test_modifier_passes_the_windows_bootstrapper_through_unchanged():
     )
 
 
-def test_modifier_keeps_compatibility_when_custom_flags_are_disabled():
+def test_modifier_is_true_passthrough_when_disabled():
     config = SimpleNamespace(
         custom_fflags_enabled=False,
         custom_fflags={'DFIntTaskSchedulerTargetFps': '20'},
@@ -742,15 +731,12 @@ def test_modifier_keeps_compatibility_when_custom_flags_are_disabled():
     modifier = CustomFFlagModifier(config)
     original = b'{"applicationSettings":{"Existing":"True"}}'
 
-    modified = modifier.modify_response('/v2/settings/application/PCDesktopClient', original)
-    assert json.loads(modified)['applicationSettings'] == {
-        'Existing': 'True',
-        EXTERNAL_CA_FLAG: 'False',
-        DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
-    }
+    assert modifier.modify_response('/v2/settings/application/PCDesktopClient', original) is (
+        original
+    )
 
 
-def test_proxy_delivers_trust_flag_with_custom_flags_off() -> None:
+def test_proxy_leaves_clientsettings_untouched_with_custom_flags_off() -> None:
     config = SimpleNamespace(custom_fflags_enabled=False, custom_fflags={'FFlagExample': 'True'})
     modifier = CustomFFlagModifier(config)
     body = b'{"applicationSettings":{"DFFlagHttpUseEmbeddedCaCerts":"True","Existing":"True"}}'
@@ -765,12 +751,12 @@ def test_proxy_delivers_trust_flag_with_custom_flags_off() -> None:
 
     payload = json.loads(delivered.split(b'\r\n\r\n', 1)[1])['applicationSettings']
     assert payload == {
-        EXTERNAL_CA_FLAG: 'False',
-        DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG: '1',
+        'DFFlagHttpUseEmbeddedCaCerts': 'True',
         'Existing': 'True',
     }
-    assert b'if-none-match' not in forwarded.lower()
-    assert not modifier.requires_fresh_response()
+    # Flags are off, so the conditional request goes upstream exactly as the
+    # client sent it instead of being forced into an unconditional fetch.
+    assert b'if-none-match' in forwarded.lower()
     assert not config.custom_fflags_enabled
     assert config.custom_fflags == {'FFlagExample': 'True'}
 

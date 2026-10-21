@@ -23,7 +23,6 @@ CLIENT_SETTINGS_COMPRESSED_PATH = '/settings-compressed/application/'
 BOOTSTRAPPER_CLIENT_SETTINGS_PLATFORM = 'PCClientBootstrapper'
 DYNAMIC_VARIABLE_RELOAD_INTERVAL_FLAG = 'DFIntSecondsBetweenDynamicVariableReloading'
 DYNAMIC_VARIABLE_RELOAD_INTERVAL_SECONDS = '1'
-EXTERNAL_CA_FLAG = 'DFFlagHttpUseEmbeddedCaCerts'
 IS_WINDOWS = sys.platform == 'win32'
 WINDOWS_FLAG_CACHE_PATH = LOCAL_APPDATA / 'Temp' / 'Roblox' / 'cache' / 'flag_cache.dat'
 MACOS_CLIENT_SETTINGS_REL = Path('ClientSettings') / 'ClientAppSettings.json'
@@ -187,13 +186,8 @@ class CustomFFlagModifier:
                 disabled_folders if isinstance(disabled_folders, list) else []
             )
 
-    @staticmethod
-    def is_enabled() -> bool:
-        """Keep proxy certificate compatibility active independently of user flags."""
-        return True
-
-    def custom_flags_enabled(self) -> bool:
-        """Return the user's custom FastFlag toggle independently of compatibility."""
+    def is_enabled(self) -> bool:
+        """Return the user's custom FastFlag toggle."""
         self._refresh_settings_from_disk()
         if self._disk_enabled is not None:
             return self._disk_enabled
@@ -220,14 +214,14 @@ class CustomFFlagModifier:
         )
 
     def runtime_flags(self) -> dict[str, str]:
-        """Return enabled custom flags and mandatory, non-persisted companions."""
+        """Return saved flags plus Fleasion's non-persisted refresh companion."""
         self._refresh_settings_from_disk()
         saved_flags = (
             self._disk_flags
             if self._disk_flags is not None
             else getattr(self.config_manager, 'custom_fflags', {})
         )
-        flags = normalize_custom_fflags(saved_flags) if self.custom_flags_enabled() else {}
+        flags = normalize_custom_fflags(saved_flags)
         disabled = (
             self._disk_disabled
             if self._disk_disabled is not None
@@ -250,9 +244,6 @@ class CustomFFlagModifier:
             if isinstance(members, list | tuple | set):
                 disabled_names.update(str(name).strip() for name in members)
         flags = {name: value for name, value in flags.items() if name not in disabled_names}
-        # Player must use the cacert.pem bundle containing Fleasion's CA
-        # Apply this after user filters so a saved value or folder cannot disable it
-        flags[EXTERNAL_CA_FLAG] = 'False'
         # Roblox/Sober reads the reloader interval before applying the response
         # it has just fetched. Therefore, when this companion flag first
         # arrives through Sober's 120-second dynamic fetch, its next wait can
@@ -299,8 +290,8 @@ class CustomFFlagModifier:
         layout is a four-byte signature length, that many signature bytes, one
         compression byte, then the ClientSettings JSON.  We preserve the header,
         remove stale overrides when disabled, and replace the JSON atomically
-        only for the known uncompressed layout.  Turning custom flags off clears
-        their seeded values while retaining the mandatory compatibility flags.
+        only for the known uncompressed layout.  Disabled mode never adds flags;
+        it only clears values previously seeded by Fleasion.
         """
         if self._flag_cache_path is None and not IS_WINDOWS:
             return False
@@ -416,7 +407,7 @@ class CustomFFlagModifier:
         flags = self.runtime_flags() if enabled else {}
         desired_names = set(flags)
         saved_names = set()
-        if not self.custom_flags_enabled():
+        if not enabled:
             self._refresh_settings_from_disk()
             saved_flags = (
                 self._disk_flags
@@ -507,9 +498,7 @@ class CustomFFlagModifier:
         )
 
     def _synchronize_linux_flags(self) -> bool:
-        # Native flag files belong to the user's custom-flag toggle. is_enabled()
-        # is always true now that it also covers certificate compatibility
-        flags = self.runtime_flags() if self.custom_flags_enabled() else {}
+        flags = self.runtime_flags() if self.is_enabled() else {}
         current_paths = set(platform_linux.find_linux_fflag_files())
         managed_paths = self._managed_linux_flags()
         stale_paths = managed_paths - current_paths if flags else managed_paths
