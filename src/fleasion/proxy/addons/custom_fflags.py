@@ -35,7 +35,7 @@ EXTERNAL_CA_FLAG_VALUE = 'False'
 #   'local' - only the pre-launch files Roblox reads before it has networking
 #   'both'  - both of the above
 #   'off'   - neither, matching v2.4.4
-EXTERNAL_CA_FLAG_DELIVERY = 'live'
+EXTERNAL_CA_FLAG_DELIVERY = 'local'
 IS_WINDOWS = sys.platform == 'win32'
 WINDOWS_FLAG_CACHE_PATH = LOCAL_APPDATA / 'Temp' / 'Roblox' / 'cache' / 'flag_cache.dat'
 MACOS_CLIENT_SETTINGS_REL = Path('ClientSettings') / 'ClientAppSettings.json'
