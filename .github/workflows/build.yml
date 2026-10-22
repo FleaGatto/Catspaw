@@ -78,7 +78,10 @@ jobs:
           version = os.environ['ARTIFACT_VERSION']
           targets = [
               ('Windows', 'windows-latest', f'Fleasion-v{version}-Windows.exe', 'dist/Fleasion-v*-Windows.exe'),
-              ('Linux', 'ubuntu-latest', f'Fleasion-v{version}-Linux', 'dist/Fleasion-v*-Linux'),
+              # Pinned, not 'latest': PyInstaller bundles the runner's own libglib, so the
+              # runner's glibc becomes the floor for every machine that runs the build.
+              # ubuntu-latest rolled to glibc 2.43 and the binaries stopped starting anywhere
+              ('Linux', 'ubuntu-24.04', f'Fleasion-v{version}-Linux', 'dist/Fleasion-v*-Linux'),
           ]
           # Hosted macOS runners can stay unassigned long enough for the job to
           # be cancelled at the queue limit, which blocks the whole release
