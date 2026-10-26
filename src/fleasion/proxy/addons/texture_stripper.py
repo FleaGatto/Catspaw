@@ -13,13 +13,14 @@ import time
 import uuid
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from ...utils import APP_CACHE_DIR, format_count, log_buffer
 from ...utils.http import http_download_to
 from ...utils.replacement_filters import ALWAYS, FilteredRoute, choose_route
 from ..roblox_metadata import strip_roblox_metadata
+from .asset_batch import envelope_items, rebuild_v3_request, to_v1_entries
 
 # Use orjson when available (2-3x faster JSON parse)
 try:
@@ -1220,9 +1221,21 @@ class TextureStripper:
         try:
             data = _loads(body)
         except Exception:
-            return body
+            return body, body
+        # Current clients post /v3/assets/batch, which wraps the entries in an
+        # {'assets': [...]} envelope. Flatten it to the v1 list this method is
+        # written against, then rebuild the envelope before forwarding
+        v3_items = envelope_items(data)
+        envelope: dict[str, Any] | None = None
+        # id(entry) -> (v3 item, entry). Removal rules drop entries from `data`,
+        # so the envelope is rebuilt from the surviving entries by identity
+        # rather than by position
+        v3_origin: dict[int, tuple[Any, Any]] = {}
+        if v3_items is not None:
+            envelope = data
+            data = to_v1_entries(v3_items, self._REVERSE, v3_origin)
         if not isinstance(data, list):
-            return body
+            return body, body
         self._register_batch(batch_id)
         # The server's tuple may have been read just before a UI config toggle.
         # Resolve it again after synchronizing the generation so this batch is
@@ -1689,12 +1702,20 @@ class TextureStripper:
                     )
 
         if modified:
-            result = _dumps(data)
+            if envelope is not None:
+                rebuild_v3_request(envelope, data, v3_origin)
+                result = _dumps(envelope)
+            else:
+                result = _dumps(data)
             # Build scraper body: same structure but with original IDs restored
             # so the cache scraper stores content under the original asset IDs.
+            # It stays in the flat v1 shape, which is what the scraper indexes
+            # against the unwrapped response
             if id_swapped:
                 for i, orig_aid in id_swapped.items():
                     data[i]['assetId'] = orig_aid
+                scraper_body = _dumps(data)
+            elif envelope is not None:
                 scraper_body = _dumps(data)
             else:
                 scraper_body = result
@@ -1753,6 +1774,13 @@ class TextureStripper:
             resp_data = _loads(resp_body)
         except Exception:
             return None
+        # A v3 response wraps its entries exactly like the request does. The
+        # envelope keeps pointing at this same list, so in-place edits below are
+        # carried back into it when a rewritten body is returned
+        resp_envelope = resp_data if envelope_items(resp_data) is not None else None
+        resp_items = envelope_items(resp_data)
+        if resp_items is not None:
+            resp_data = resp_items
         if not isinstance(resp_data, list):
             return None
 
@@ -1765,6 +1793,9 @@ class TextureStripper:
         if req_body:
             try:
                 req_data = _loads(req_body)
+                req_items = envelope_items(req_data)
+                if req_items is not None:
+                    req_data = to_v1_entries(req_items, self._REVERSE)
                 if isinstance(req_data, list):
                     for req_item in req_data:
                         if isinstance(req_item, dict):
@@ -1942,7 +1973,10 @@ class TextureStripper:
                     self._solidmodel_injections[base_loc] = url_value
                     self._solidmodel_force_v3.add(base_loc)
                     log_buffer.log('SolidModel', f'Will inject OBJ for {base_loc[:60]}...')
-        return _dumps(resp_data) if rewritten else None
+        if not rewritten:
+            return None
+        # The client speaks v3, so a rewritten body has to go back in its envelope
+        return _dumps(resp_envelope if resp_envelope is not None else resp_data)
 
     # CDN request check (called from server MITM thread for Roblox CDN hosts)
 

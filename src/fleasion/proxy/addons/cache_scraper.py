@@ -23,6 +23,7 @@ import requests
 from ...cache.cache_manager import CacheManager
 from ...utils import format_count, log_buffer
 from ..upstream import HttpProxyConfig
+from .asset_batch import envelope_items, to_v1_entries
 
 try:
     import orjson
@@ -41,6 +42,11 @@ logger = logging.getLogger(__name__)
 ASSET_DELIVERY_HOST = 'assetdelivery.roblox.com'
 CDN_HOSTS = frozenset({'fts.rbxcdn.com', 'contentdelivery.roblox.com'})
 DELIVERY_ENDPOINT = '/v1/assets/batch'
+
+# v3 batch entries name their asset type instead of numbering it
+_TYPE_IDS: dict[str, int] = {
+    name.lower(): type_id for type_id, name in CacheManager.ASSET_TYPES.items()
+}
 CREATOR_GAME_PAGE_LIMITS = (50, 25, 10)
 CREATOR_GAME_MAX_SCAN = 300
 
@@ -435,6 +441,14 @@ class CacheScraper:
             res_json = _loads(resp_body)
         except Exception:
             return
+
+        # A v3 batch wraps both sides in an {'assets': [...]} envelope
+        req_items = envelope_items(req_json)
+        if req_items is not None:
+            req_json = to_v1_entries(req_items, _TYPE_IDS)
+        res_items = envelope_items(res_json)
+        if res_items is not None:
+            res_json = res_items
 
         if not isinstance(req_json, list) or not isinstance(res_json, list):
             return

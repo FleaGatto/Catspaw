@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from .addons.cache_scraper import CacheScraper
     from .addons.texture_stripper import TextureStripper
 
+from .addons.asset_batch import envelope_items
+from .addons.asset_batch import is_batch_request as is_asset_batch_request
 from .roblox_metadata import strip_roblox_metadata
 from .upstream import (
     AutoConnector,
@@ -816,6 +818,21 @@ def _body_log_snippet(body: bytes, limit: int = 256) -> str:
 
 def _is_empty_json_array(body: bytes) -> bool:
     return body.strip() == b'[]'
+
+
+def _is_empty_batch_body(body: bytes) -> bool:
+    """Whether a batch body carries no assets, in either wire format."""
+    if _is_empty_json_array(body):
+        return True
+    stripped = body.strip()
+    if not stripped.startswith(b'{'):
+        return False
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        return False
+    items = envelope_items(parsed)
+    return items is not None and not items
 
 
 def _make_proxy_error_response(status_code: int, message: str) -> bytes:
@@ -2508,7 +2525,7 @@ class FleasionProxy:
                     _log_entry,
                     hold=self._intercept_all_hosts and self._intercept_matches(host, path),
                 )
-                is_batch = host == ASSET_DELIVERY_HOST and b'/v1/assets/batch' in req_first
+                is_batch = host == ASSET_DELIVERY_HOST and is_asset_batch_request(req_first)
                 bypass_custom_fflags = (
                     req_headers.get(_BROWSER_BYPASS_CUSTOM_FFLAGS_HEADER, b'').strip() == b'1'
                 )
@@ -2649,10 +2666,12 @@ class FleasionProxy:
                         replacements_tuple,
                         batch_id,
                     )
-                    if _is_empty_json_array(req_body_modified) and not _is_empty_json_array(
+                    if _is_empty_batch_body(req_body_modified) and not _is_empty_batch_body(
                         req_body_plain
                     ):
-                        writer.write(_make_local_response(200, b'[]'))
+                        # Answer in the shape the client asked in: the modified
+                        # body is already the emptied list or v3 envelope
+                        writer.write(_make_local_response(200, req_body_modified))
                         await writer.drain()
                         if not _keep_alive(req_first, req_headers):
                             break
