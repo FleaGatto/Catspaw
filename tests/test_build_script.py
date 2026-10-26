@@ -31,7 +31,7 @@ def test_windows_packaging_uses_upx_but_excludes_graphics_runtime() -> None:
     spec_source = (root / 'Fleasion.spec').read_text(encoding='utf-8')
     workflow_source = (root / '.github/workflows/build.yml').read_text(encoding='utf-8')
 
-    assert "_use_upx = sys.platform == 'win32'" in spec_source
+    assert "_use_upx = sys.platform == 'win32' and not _sign_bundle" in spec_source
     assert 'Install UPX' in workflow_source
     for required_exclusion in (
         "'Qt6Gui.dll'",
@@ -42,6 +42,31 @@ def test_windows_packaging_uses_upx_but_excludes_graphics_runtime() -> None:
         "'opengl32sw.dll'",
     ):
         assert required_exclusion in spec_source
+
+
+def test_signed_windows_build_turns_upx_off() -> None:
+    """UPX would discard the signatures the signing step just applied.
+
+    Smart App Control blocks unsigned native modules (upstream #82, #84), so a
+    signed build has to reach the bundle with its signatures intact.
+    """
+    root = Path(__file__).resolve().parents[1]
+    spec_source = (root / 'Fleasion.spec').read_text(encoding='utf-8')
+    workflow_source = (root / '.github/workflows/build.yml').read_text(encoding='utf-8')
+
+    assert "_sign_bundle = os.environ.get('FLEASION_SIGN_BUNDLE') == '1'" in spec_source
+    assert "_use_upx = sys.platform == 'win32' and not _sign_bundle" in spec_source
+
+    # Both steps stay no-ops until a certificate is configured, so forks build
+    assert 'Sign bundled native modules' in workflow_source
+    assert 'Sign Windows executable' in workflow_source
+    assert 'WINDOWS_SIGN_PFX_BASE64' in workflow_source
+    assert "'FLEASION_SIGN_BUNDLE=1' | Out-File" in workflow_source
+
+    # The bundled modules must be signed before PyInstaller collects them
+    assert workflow_source.index('Sign bundled native modules') < workflow_source.index(
+        'Build package'
+    )
 
 
 def test_windows_archive_check_recurses_into_pyz_and_tracks_qopenglwindow() -> None:

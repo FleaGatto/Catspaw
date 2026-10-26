@@ -182,8 +182,105 @@ jobs:
         if: runner.os == 'macOS'
         run: sudo softwareupdate --install-rosetta --agree-to-license
 
+      # Smart App Control (policy VerifiedAndReputableDesktop) evaluates every
+      # native module the process loads, not just the executable, and blocks the
+      # unsigned ones with Code Integrity event 3077 (upstream #82, #84). The
+      # modules it blocks ship unsigned in their own wheels -- Pillow 0 of 8 PE
+      # files signed, PyQt6-sip 0 of 1, sounddevice's PortAudio 0 of 6 -- so
+      # signing dist/*.exe alone cannot fix it: they have to be signed before
+      # PyInstaller collects them into the one-file bundle.
+      #
+      # Without WINDOWS_SIGN_PFX_BASE64 this is a no-op, so forks and pull
+      # requests still build exactly as before.
+      - name: Sign bundled native modules
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_SIGN_PFX_BASE64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
+          WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGN_PFX_PASSWORD }}
+          WINDOWS_SIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGN_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:WINDOWS_SIGN_PFX_BASE64) {
+            Write-Host 'No signing certificate configured: bundled modules stay unsigned.'
+            Write-Host 'Smart App Control will keep blocking them. See docs/windows-app-control.md.'
+            exit 0
+          }
+
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found on this runner.' }
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'fleasion-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_PFX_BASE64))
+          $timestampUrl = if ($env:WINDOWS_SIGN_TIMESTAMP_URL) {
+            $env:WINDOWS_SIGN_TIMESTAMP_URL
+          } else {
+            'http://timestamp.digicert.com'
+          }
+
+          try {
+            # Everything PyInstaller collects comes from the synced venv. Only
+            # the unsigned files are touched, so the signatures Qt already ships
+            # on its own DLLs are left exactly as they are
+            $targets = Get-ChildItem .venv\Lib\site-packages -Recurse -Include *.pyd,*.dll -File |
+              Where-Object { $_.FullName -notmatch '__pycache__' } |
+              Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -eq 'NotSigned' }
+
+            Write-Host "Signing $($targets.Count) unsigned native module(s)."
+            for ($i = 0; $i -lt $targets.Count; $i += 50) {
+              $batch = $targets[$i..([Math]::Min($i + 49, $targets.Count - 1))]
+              & $signtool.FullName sign /f $pfx /p $env:WINDOWS_SIGN_PFX_PASSWORD `
+                /fd SHA256 /tr $timestampUrl /td SHA256 $batch.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on batch starting at $i." }
+            }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+          # Tells Fleasion.spec to leave UPX off: compressing a signed module
+          # would discard the signature this step just applied
+          'FLEASION_SIGN_BUNDLE=1' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build package
         run: uv run build
+
+      - name: Sign Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_SIGN_PFX_BASE64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
+          WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGN_PFX_PASSWORD }}
+          WINDOWS_SIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGN_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:WINDOWS_SIGN_PFX_BASE64) {
+            Write-Host 'No signing certificate configured: the executable stays unsigned.'
+            exit 0
+          }
+
+          $exe = Get-ChildItem dist/Fleasion-v*-Windows.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Could not find the Windows executable in dist/.' }
+
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found on this runner.' }
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'fleasion-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_PFX_BASE64))
+          $timestampUrl = if ($env:WINDOWS_SIGN_TIMESTAMP_URL) {
+            $env:WINDOWS_SIGN_TIMESTAMP_URL
+          } else {
+            'http://timestamp.digicert.com'
+          }
+
+          try {
+            & $signtool.FullName sign /f $pfx /p $env:WINDOWS_SIGN_PFX_PASSWORD `
+              /fd SHA256 /tr $timestampUrl /td SHA256 $exe.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'signtool failed on the executable.' }
+            & $signtool.FullName verify /pa $exe.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'signtool could not verify the executable.' }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Verify Windows lazy OpenGL payload
         if: runner.os == 'Windows'

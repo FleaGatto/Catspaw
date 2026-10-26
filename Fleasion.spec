@@ -266,7 +266,14 @@ _macos_target_arch = (
 # Qt/PyQt graphics stack byte-for-byte as shipped by its wheels. The dashboard
 # no longer depends on OpenGL at startup, so there is no reason to disable UPX
 # for unrelated binaries while we diagnose driver-specific preview failures.
-_use_upx = sys.platform == 'win32'
+#
+# UPX rewrites the file, which discards an Authenticode signature and changes
+# the hash Windows reputation is keyed on. When the build signs the bundled
+# modules (FLEASION_SIGN_BUNDLE=1), compressing them afterwards would throw
+# that signature away and leave Smart App Control blocking them exactly as
+# before, so UPX is off for signed builds
+_sign_bundle = os.environ.get('FLEASION_SIGN_BUNDLE') == '1'
+_use_upx = sys.platform == 'win32' and not _sign_bundle
 _bundled_macos_helpers = {
     'arm64': Path('dist/fleasion-proxy-helper-arm64'),
     'x86_64': Path('dist/fleasion-proxy-helper-x86_64'),
