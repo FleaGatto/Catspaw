@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from PyQt6.QtCore import Qt
+
+if TYPE_CHECKING:
+    from PyQt6.QtWidgets import QApplication
+
+from .translations.ar import ARABIC
 from .translations.en import ENGLISH
 from .translations.es import SPANISH
+from .translations.hi import HINDI
 from .translations.pt import PORTUGUESE
 from .translations.ru import RUSSIAN
 from .translations.kk import KAZAKH
@@ -20,6 +27,8 @@ DEFAULT_LANGUAGE = 'en'
 
 LANGUAGES: dict[str, str] = {
     'en': 'English',
+    'ar': 'العربية',
+    'hi': 'हिन्दी',
     'es': 'Español',
     'pt': 'Português (Brasil)',
     'ru': 'Русский',
@@ -33,6 +42,8 @@ LANGUAGES: dict[str, str] = {
 
 _TRANSLATIONS: dict[str, Mapping[str, str]] = {
     DEFAULT_LANGUAGE: ENGLISH,
+    'ar': ARABIC,
+    'hi': HINDI,
     'es': SPANISH,
     'pt': PORTUGUESE,
     'ru': RUSSIAN,
@@ -51,6 +62,9 @@ _LANGUAGE_ALIASES = {
     'zh-hans-sg': 'zh',
     'zh-sg': 'zh',
 }
+# Arabic is the only right-to-left catalog; Hindi is written left to right
+_RTL_LANGUAGES = frozenset({'ar'})
+
 _current_language = DEFAULT_LANGUAGE
 
 
@@ -81,6 +95,18 @@ def set_language(language: Any) -> str:
 
 def get_language() -> str:
     return _current_language
+
+
+def is_right_to_left() -> bool:
+    """Whether the active language is written right to left."""
+    return _current_language in _RTL_LANGUAGES
+
+
+def apply_language_direction(app: QApplication) -> None:
+    """Apply the active language's reading direction to the Qt widget tree."""
+    app.setLayoutDirection(
+        Qt.LayoutDirection.RightToLeft if is_right_to_left() else Qt.LayoutDirection.LeftToRight
+    )
 
 
 def tr(identifier: str, /, **values: Any) -> str:

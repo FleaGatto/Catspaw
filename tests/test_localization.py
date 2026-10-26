@@ -7,9 +7,11 @@ from pathlib import Path
 
 from fleasion import localization
 from fleasion.config import manager as manager_module
+from fleasion.translations.ar import ARABIC
 from fleasion.translations.de import GERMAN
 from fleasion.translations.es import SPANISH
 from fleasion.translations.fr import FRENCH
+from fleasion.translations.hi import HINDI
 from fleasion.translations.kk import KAZAKH
 from fleasion.translations.pl import POLISH
 from fleasion.translations.pt import PORTUGUESE
@@ -19,6 +21,8 @@ from fleasion.translations.zh import CHINESE
 
 
 _TRANSLATED_CATALOGS = {
+    'ar': ARABIC,
+    'hi': HINDI,
     'es': SPANISH,
     'pt': PORTUGUESE,
     'ru': RUSSIAN,
@@ -34,6 +38,8 @@ _TRANSLATED_CATALOGS = {
 def test_english_is_default_and_supported_languages_are_available():
     assert localization.available_languages() == (
         ('en', 'English'),
+        ('ar', 'العربية'),
+        ('hi', 'हिन्दी'),
         ('es', 'Español'),
         ('pt', 'Português (Brasil)'),
         ('ru', 'Русский'),
@@ -46,6 +52,9 @@ def test_english_is_default_and_supported_languages_are_available():
     )
     assert localization.normalize_language(None) == 'en'
     assert localization.normalize_language('en-US') == 'en'
+    assert localization.normalize_language('ar-SA') == 'ar'
+    assert localization.normalize_language('ar_EG') == 'ar'
+    assert localization.normalize_language('hi-IN') == 'hi'
     assert localization.normalize_language('es-MX') == 'es'
     assert localization.normalize_language('es_ES') == 'es'
     assert localization.normalize_language('pt') == 'pt'
@@ -148,6 +157,8 @@ def test_translation_catalogs_match_english_keys_markup_and_placeholders():
     tag_re = re.compile(r'<[^>]+>')
 
     for catalog in (
+        ARABIC,
+        HINDI,
         SPANISH,
         PORTUGUESE,
         RUSSIAN,
@@ -1239,3 +1250,31 @@ def test_config_language_invalid_saved_value_falls_back_to_english(tmp_path, mon
     manager.language = 'also-invalid'
     assert manager.language == 'en'
     assert json.loads(config_file.read_text(encoding='utf-8'))['language'] == 'en'
+
+
+def test_arabic_is_right_to_left_and_hindi_is_not():
+    """Hindi uses Devanagari, which is written left to right like English."""
+    try:
+        localization.set_language('ar')
+        assert localization.is_right_to_left()
+        for code in ('hi', 'en', 'ru'):
+            localization.set_language(code)
+            assert not localization.is_right_to_left(), code
+    finally:
+        localization.set_language('en')
+
+
+def test_arabic_and_hindi_translate_a_known_string():
+    try:
+        localization.set_language('ar')
+        arabic = localization.tr('app.cancel')
+        localization.set_language('hi')
+        hindi = localization.tr('app.cancel')
+    finally:
+        localization.set_language('en')
+
+    assert arabic == ARABIC['app.cancel'] != localization.ENGLISH['app.cancel']
+    assert hindi == HINDI['app.cancel'] != localization.ENGLISH['app.cancel']
+    # Scripts actually used, rather than a copy of the English
+    assert any('\u0600' <= character <= '\u06ff' for character in arabic)
+    assert any('\u0900' <= character <= '\u097f' for character in hindi)

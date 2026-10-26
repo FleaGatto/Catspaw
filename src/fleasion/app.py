@@ -33,7 +33,13 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .config import ConfigFolderWatcher, ConfigManager
-from .localization import available_languages, set_language, tr, verbatim
+from .localization import (
+    apply_language_direction,
+    available_languages,
+    set_language,
+    tr,
+    verbatim,
+)
 from .modifications import ModificationManager
 from .prejsons import download_prejsons
 from .proxy import ProxyMaster, check_and_patch_running_roblox_ca
@@ -960,6 +966,9 @@ def _prompt_first_time_language(config_manager: ConfigManager) -> None:
     selected = str(combo.currentData() or 'en')
     config_manager.language = selected
     set_language(config_manager.language)
+    _app = QApplication.instance()
+    if isinstance(_app, QApplication):
+        apply_language_direction(_app)
 
 
 def _prompt_first_time_startup_options(config_manager: ConfigManager, tray=None) -> None:
@@ -4391,6 +4400,7 @@ def main():
     # process can still build the prompt UI and show a fallback dialog.
     config_manager = ConfigManager()
     set_language(config_manager.language)
+    apply_language_direction(app)
     if not _suppress_dashboard and not config_manager.first_time_setup_complete:
         _prompt_first_time_language(config_manager)
     if sys.platform.startswith('linux'):
